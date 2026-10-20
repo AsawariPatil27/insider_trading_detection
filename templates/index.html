@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AI-Driven Insider Trading Detection System — Upload trade and profile data, run ML classification, and perform sentiment analysis.">
+    <title>Insider Trading Detection — AI-Driven Surveillance Portal</title>
+    <link rel="stylesheet" href="/static/style.css?v=20260923_light">
+    <style>
+        /* Explicit Light Mode Force Overrides */
+        html, body {
+            background-color: #f4f6f9 !important;
+            color: #1e293b !important;
+        }
+        .header {
+            background: #ffffff !important;
+            border-bottom: 1px solid #e2e8f0 !important;
+        }
+        .glass-card, .metric-card, .upload-zone, .modal-container {
+            background-color: #ffffff !important;
+            border: 1px solid #e2e8f0 !important;
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05) !important;
+        }
+        .data-table th {
+            background: #f1f5f9 !important;
+            color: #475569 !important;
+        }
+        .data-table td {
+            background: #ffffff !important;
+            color: #1e293b !important;
+            border-bottom: 1px solid #f1f5f9 !important;
+        }
+        .data-table tbody tr:hover td {
+            background: #f8fafc !important;
+        }
+    </style>
+</head>
+<body>
+
+<!-- ═══════════ Header ═══════════ -->
+<header class="header">
+    <div class="container header-inner">
+        <div class="header-icon">🛡️</div>
+        <div>
+            <h1>Insider Trading Detection System</h1>
+            <p>AI-Driven Trade Pattern Analysis &amp; Regulatory Reasoning</p>
+        </div>
+    </div>
+</header>
+
+<main class="container">
+
+    <!-- ═══════════ Upload Section ═══════════ -->
+    <section class="section" id="upload-section">
+        <div class="section-title">
+            <span class="icon" style="background:rgba(99,102,241,0.12); color:var(--accent-indigo);">📂</span>
+            Upload Data Files
+        </div>
+        <p class="section-subtitle">Upload your trade and profile CSV files. Files are validated by column structure, not by filename.</p>
+
+        <div class="upload-grid">
+            <!-- Trade file -->
+            <div class="upload-zone" id="trade-zone" tabindex="0" role="button" aria-label="Upload trade CSV file">
+                <div class="icon-circle">📊</div>
+                <h3>Trade Data</h3>
+                <p>Drag & drop or click to select<br>Must contain: trade_id, trader_id, isin, timestamp, is_insider …</p>
+                <input type="file" id="trade-file" accept=".csv">
+                <div class="file-info hidden" id="trade-info"></div>
+            </div>
+
+            <!-- Profile file -->
+            <div class="upload-zone" id="profile-zone" tabindex="0" role="button" aria-label="Upload profile CSV file">
+                <div class="icon-circle">👤</div>
+                <h3>Profile Data</h3>
+                <p>Drag & drop or click to select<br>Must contain: trader_id, role_class, preclear_status, associated_pan …</p>
+                <input type="file" id="profile-file" accept=".csv">
+                <div class="file-info hidden" id="profile-info"></div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn btn-primary btn-lg" id="run-btn" disabled>
+                <span>🚀</span> Run ML Classification
+            </button>
+        </div>
+    </section>
+
+    <!-- ═══════════ ML Results Section (hidden until results arrive) ═══════════ -->
+    <section class="section hidden" id="results-section">
+
+        <div class="section-title">
+            <span class="icon" style="background:rgba(6,182,212,0.12); color:var(--accent-cyan);">📈</span>
+            ML Classification Results
+        </div>
+        <p class="section-subtitle">Held-out test performance — traders in the test set were never seen during training.</p>
+
+        <!-- Overfit check -->
+        <div id="overfit-banner"></div>
+
+        <!-- Metric cards -->
+        <div class="metrics-grid" id="metrics-grid"></div>
+
+        <!-- Summary pills -->
+        <div class="summary-row" id="summary-row"></div>
+
+        <!-- Two-col: confusion matrix + risk breakdown -->
+        <div class="two-col mb-6">
+            <div class="glass-card">
+                <h3 style="font-size:0.92rem; font-weight:600; margin-bottom:16px; color:var(--text-secondary);">Confusion Matrix</h3>
+                <div class="confusion-matrix" id="confusion-matrix"></div>
+            </div>
+            <div class="glass-card">
+                <h3 style="font-size:0.92rem; font-weight:600; margin-bottom:16px; color:var(--text-secondary);">Risk Level Distribution</h3>
+                <div id="risk-bars"></div>
+            </div>
+        </div>
+
+        <!-- Flagged trades table -->
+        <div class="glass-card">
+            <h3 style="font-size:0.92rem; font-weight:600; margin-bottom:4px;">Flagged Trades</h3>
+            <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0;" id="flagged-count-label"></p>
+            <div class="table-container" id="flagged-table-container"></div>
+        </div>
+
+        <!-- Sentiment button -->
+        <div class="sentiment-btn-wrapper" id="sentiment-btn-wrapper">
+            <div class="divider"></div>
+            <p style="color:var(--text-muted); font-size:0.88rem; margin-bottom:16px;">
+                Ready to analyse news sentiment for flagged trades?
+            </p>
+            <button class="btn btn-secondary btn-lg" id="sentiment-btn">
+                <span>🧠</span> Perform Sentiment Analysis
+            </button>
+        </div>
+    </section>
+
+    <!-- ═══════════ Sentiment Results Section ═══════════ -->
+    <section class="section hidden sentiment-section" id="sentiment-section">
+
+        <div class="section-title">
+            <span class="icon" style="background:rgba(139,92,246,0.12); color:var(--accent-violet);">🧠</span>
+            Sentiment Analysis Results
+        </div>
+        <p class="section-subtitle">FinBERT sentiment on pre-event news headlines, matched by ISIN to flagged trades.</p>
+
+        <!-- Sentiment summary pills -->
+        <div class="summary-row" id="sentiment-summary-row"></div>
+
+        <!-- Sentiment metrics -->
+        <div class="metrics-grid" id="sentiment-metrics-grid"></div>
+
+        <!-- Sentiment confusion matrix -->
+        <div class="two-col mb-6">
+            <div class="glass-card">
+                <h3 style="font-size:0.92rem; font-weight:600; margin-bottom:16px; color:var(--text-secondary);">Sentiment-Refined Confusion Matrix</h3>
+                <div class="confusion-matrix" id="sentiment-confusion-matrix"></div>
+            </div>
+            <div class="glass-card">
+                <h3 style="font-size:0.92rem; font-weight:600; margin-bottom:16px; color:var(--text-secondary);">ISIN Sentiment Breakdown</h3>
+                <div class="table-container" style="max-height:320px;" id="isin-sentiment-container"></div>
+            </div>
+        </div>
+
+        <!-- Refined trades table -->
+        <div class="glass-card">
+            <h3 style="font-size:0.92rem; font-weight:600; margin-bottom:4px;">Sentiment-Refined Flagged Trades</h3>
+            <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0;" id="sentiment-flagged-label"></p>
+            <div class="table-container" id="sentiment-table-container"></div>
+        </div>
+
+        <!-- Explainability trigger button -->
+        <div class="sentiment-btn-wrapper" id="explainability-btn-wrapper" style="margin-top:24px;">
+            <div class="divider"></div>
+            <p style="color:var(--text-muted); font-size:0.88rem; margin-bottom:16px;">
+                Proceed to Regulatory Reasoning for confirmed insider trades?
+            </p>
+            <button class="btn btn-primary btn-lg" id="explainability-trigger-btn" onclick="loadExplainabilitySection()">
+                <span>⚖️</span> View Regulatory Explainability &amp; PDF Export
+            </button>
+        </div>
+    </section>
+
+    <!-- ═══════════ Regulatory Explainability Section ═══════════ -->
+    <section class="section hidden" id="explainability-section">
+        <div class="section-title">
+            <span class="icon" style="background:rgba(239,68,68,0.12); color:var(--accent-rose);">⚖️</span>
+            Regulatory Explainability &amp; PDF Export
+        </div>
+        <p class="section-subtitle">Strictly filtering for <b>confirmed ground-truth insider trades (is_insider = 1)</b> that were <b>flagged by sentiment analysis (sentiment_flag = 1)</b>. Click any trade row to view violated SEBI (PIT) Regulations and generate a PDF compliance report.</p>
+
+        <div class="summary-row" id="explainability-summary-row"></div>
+
+        <div class="glass-card">
+            <h3 style="font-size:0.92rem; font-weight:600; margin-bottom:4px;">Truly Insider Trades Flagged by Sentiment Analysis</h3>
+            <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:12px;" id="explainability-count-label"></p>
+            <div class="table-container" id="explainability-table-container"></div>
+        </div>
+    </section>
+
+</main>
+
+<!-- ═══════════ Modal Dialog for Regulatory Explainability ═══════════ -->
+<div class="modal-backdrop hidden" id="explain-modal">
+    <div class="modal-container">
+        <div class="modal-header">
+            <div class="modal-title-group">
+                <h2 id="modal-trade-title">Trade Regulatory Breakdown</h2>
+                <p id="modal-trade-subtitle">SEBI (Prohibition of Insider Trading) Regulations Compliance Audit</p>
+            </div>
+            <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body" id="modal-body">
+            <!-- Dynamic trade details grid and violated SEBI sections inserted here -->
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-primary" id="modal-pdf-btn">📄 Convert to PDF Report</button>
+            <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════ Progress Overlay ═══════════ -->
+<div class="progress-overlay hidden" id="progress-overlay">
+    <div class="spinner"></div>
+    <div class="progress-text" id="progress-text">Processing…</div>
+    <div class="progress-sub" id="progress-sub"></div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   Insider Trading Detection Portal — Frontend Logic
+   ═══════════════════════════════════════════════════════════ */
+
+// ---- State ----
+let tradeFile = null, profileFile = null;
+let mlResults = null, sentimentResults = null;
+let currentExplainTradeId = null;
+
+// ---- DOM references ----
+const $ = id => document.getElementById(id);
+
+
+const tradeZone = $('trade-zone'), profileZone = $('profile-zone');
+const tradeInput = $('trade-file'), profileInput = $('profile-file');
+const tradeInfo = $('trade-info'), profileInfo = $('profile-info');
+const runBtn = $('run-btn'), sentimentBtn = $('sentiment-btn');
+const resultsSection = $('results-section'), sentimentSection = $('sentiment-section');
+const overlay = $('progress-overlay'), progressText = $('progress-text'), progressSub = $('progress-sub');
+
+
+// ═══════════ File Upload Logic ═══════════
+
+function setupUploadZone(zone, input, infoEl, onFile) {
+    zone.addEventListener('click', () => input.click());
+    zone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') input.click(); });
+
+    input.addEventListener('change', () => {
+        if (input.files.length) onFile(input.files[0]);
+    });
+
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', e => {
+        e.preventDefault();
+        zone.classList.remove('drag-over');
+        if (e.dataTransfer.files.length) {
+            input.files = e.dataTransfer.files;
+            onFile(e.dataTransfer.files[0]);
+        }
+    });
+}
+
+function handleTradeFile(file) {
+    tradeFile = file;
+    tradeZone.classList.add('file-loaded');
+    tradeInfo.textContent = `✓ ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+    tradeInfo.classList.remove('hidden');
+    checkReady();
+}
+
+function handleProfileFile(file) {
+    profileFile = file;
+    profileZone.classList.add('file-loaded');
+    profileInfo.textContent = `✓ ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+    profileInfo.classList.remove('hidden');
+    checkReady();
+}
+
+function checkReady() {
+    runBtn.disabled = !(tradeFile && profileFile);
+}
+
+setupUploadZone(tradeZone, tradeInput, tradeInfo, handleTradeFile);
+setupUploadZone(profileZone, profileInput, profileInfo, handleProfileFile);
+
+
+// ═══════════ Progress Overlay ═══════════
+
+function showProgress(msg, sub = '') {
+    progressText.textContent = msg;
+    progressSub.textContent = sub;
+    overlay.classList.remove('hidden');
+}
+
+function hideProgress() { overlay.classList.add('hidden'); }
+
+
+// ═══════════ Run ML Classification ═══════════
+
+runBtn.addEventListener('click', async () => {
+    if (!tradeFile || !profileFile) return;
+
+    showProgress('Running ML Classification Pipeline…', 'Feature engineering → Training → Evaluation');
+    runBtn.disabled = true;
+
+    const fd = new FormData();
+    fd.append('trade_file', tradeFile);
+    fd.append('profile_file', profileFile);
+
+    try {
+        const resp = await fetch('/api/upload', { method: 'POST', body: fd });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            alert('Error: ' + (data.detail || JSON.stringify(data)));
+            hideProgress();
+            runBtn.disabled = false;
+            return;
+        }
+
+        mlResults = data;
+        renderMLResults(data);
+        resultsSection.classList.remove('hidden');
+        sentimentSection.classList.add('hidden');
+
+        // Scroll to results
+        setTimeout(() => resultsSection.scrollIntoView({ behavior: 'smooth' }), 200);
+    } catch (err) {
+        alert('Request failed: ' + err.message);
+    } finally {
+        hideProgress();
+        runBtn.disabled = false;
+    }
+});
+
+
+// ═══════════ Render ML Results ═══════════
+
+function renderMLResults(data) {
+    const { test_metrics, train_metrics, pr_auc_gap, threshold, risk_levels, total_trades, flagged_count, flagged_trades } = data;
+
+    // Overfitting banner
+    const isOk = pr_auc_gap < 0.03;
+    $('overfit-banner').className = `overfit-banner fade-in ${isOk ? 'pass' : 'warn'}`;
+    $('overfit-banner').innerHTML = `
+        <span style="font-size:1.2rem">${isOk ? '✅' : '⚠️'}</span>
+        <span>
+            <strong>Overfitting Check:</strong> PR-AUC train ${train_metrics.pr_auc.toFixed(3)} vs test ${test_metrics.pr_auc.toFixed(3)}
+            (gap ${pr_auc_gap.toFixed(3)}) — ${isOk ? 'No material overfitting' : 'WARNING: possible overfitting'}
+        </span>
+    `;
+
+    // Metric cards
+    const metricDefs = [
+        { key: 'accuracy',  label: 'Accuracy',  accent: 'indigo',  fmt: pct },
+        { key: 'precision', label: 'Precision', accent: 'violet',  fmt: pct },
+        { key: 'recall',    label: 'Recall',    accent: 'cyan',    fmt: pct },
+        { key: 'f1',        label: 'F1 Score',  accent: 'emerald', fmt: pct },
+        { key: 'roc_auc',   label: 'ROC-AUC',   accent: 'blue',   fmt: pct },
+        { key: 'pr_auc',    label: 'PR-AUC',    accent: 'amber',  fmt: pct },
+    ];
+    $('metrics-grid').innerHTML = metricDefs.map((m, i) => `
+        <div class="metric-card accent-${m.accent} fade-in fade-in-delay-${i % 4 + 1}">
+            <div class="label">${m.label}</div>
+            <div class="value">${m.fmt(test_metrics[m.key])}</div>
+            <div class="sub">Test Set</div>
+        </div>
+    `).join('');
+
+    // Summary pills
+    $('summary-row').innerHTML = `
+        <div class="summary-pill fade-in"><span class="dot dot-total"></span> Total: <strong>${total_trades.toLocaleString()}</strong> trades</div>
+        <div class="summary-pill fade-in fade-in-delay-1"><span class="dot dot-flagged"></span> Flagged: <strong>${flagged_count.toLocaleString()}</strong></div>
+        <div class="summary-pill fade-in fade-in-delay-2"><span class="dot dot-high"></span> High Risk: <strong>${risk_levels.High || 0}</strong></div>
+        <div class="summary-pill fade-in fade-in-delay-3"><span class="dot dot-medium"></span> Medium Risk: <strong>${risk_levels.Medium || 0}</strong></div>
+        <div class="summary-pill fade-in fade-in-delay-4"><span class="dot dot-low"></span> Low Risk: <strong>${risk_levels.Low || 0}</strong></div>
+    `;
+
+    // Confusion matrix
+    const cm = test_metrics;
+    $('confusion-matrix').innerHTML = `
+        <div class="cm-label"></div>
+        <div class="cm-label">Pred 0</div>
+        <div class="cm-label">Pred 1</div>
+        <div class="cm-label" style="writing-mode:vertical-rl; transform:rotate(180deg);">Actual 0</div>
+        <div class="cm-cell cm-tn"><span class="cell-label">TN</span>${cm.tn.toLocaleString()}</div>
+        <div class="cm-cell cm-fp"><span class="cell-label">FP</span>${cm.fp.toLocaleString()}</div>
+        <div class="cm-label" style="writing-mode:vertical-rl; transform:rotate(180deg);">Actual 1</div>
+        <div class="cm-cell cm-fn"><span class="cell-label">FN</span>${cm.fn.toLocaleString()}</div>
+        <div class="cm-cell cm-tp"><span class="cell-label">TP</span>${cm.tp.toLocaleString()}</div>
+    `;
+
+    // Risk bars
+    const total = total_trades || 1;
+    const riskData = [
+        { label: 'High', count: risk_levels.High || 0, color: 'var(--accent-rose)' },
+        { label: 'Medium', count: risk_levels.Medium || 0, color: 'var(--accent-amber)' },
+        { label: 'Low', count: risk_levels.Low || 0, color: 'var(--accent-emerald)' },
+    ];
+    $('risk-bars').innerHTML = riskData.map(r => `
+        <div style="margin-bottom:16px;">
+            <div style="display:flex; justify-content:space-between; font-size:0.82rem; margin-bottom:6px;">
+                <span style="color:var(--text-secondary)">${r.label} Risk</span>
+                <span style="color:var(--text-muted)">${r.count.toLocaleString()} (${((r.count/total)*100).toFixed(1)}%)</span>
+            </div>
+            <div style="height:8px; background:var(--bg-glass); border-radius:4px; overflow:hidden;">
+                <div style="height:100%; width:${(r.count/total)*100}%; background:${r.color}; border-radius:4px; transition:width 0.8s ease;"></div>
+            </div>
+        </div>
+    `).join('');
+
+    // Flagged trades table
+    $('flagged-count-label').textContent = `${flagged_count} trades flagged out of ${total_trades.toLocaleString()} total — threshold: ${threshold.toFixed(3)}`;
+    renderTradesTable('flagged-table-container', flagged_trades, [
+        'trade_id', 'trader_id', 'isin', 'trade_type', 'quantity', 'risk_score', 'risk_level', 'prob_insider', 'top_reasons'
+    ]);
+}
+
+
+// ═══════════ Run Sentiment Analysis ═══════════
+
+sentimentBtn.addEventListener('click', async () => {
+    showProgress('Running Sentiment Analysis…', 'Loading FinBERT model and processing article headlines');
+    sentimentBtn.disabled = true;
+
+    try {
+        const resp = await fetch('/api/sentiment', { method: 'POST' });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            alert('Error: ' + (data.detail || JSON.stringify(data)));
+            hideProgress();
+            sentimentBtn.disabled = false;
+            return;
+        }
+
+        sentimentResults = data;
+        renderSentimentResults(data);
+        sentimentSection.classList.remove('hidden');
+        setTimeout(() => sentimentSection.scrollIntoView({ behavior: 'smooth' }), 200);
+    } catch (err) {
+        alert('Request failed: ' + err.message);
+    } finally {
+        hideProgress();
+        sentimentBtn.disabled = false;
+    }
+});
+
+
+// ═══════════ Render Sentiment Results ═══════════
+
+function renderSentimentResults(data) {
+    const { metrics, isin_sentiments, refined_trades, summary } = data;
+
+    // Summary pills
+    $('sentiment-summary-row').innerHTML = `
+        <div class="summary-pill fade-in"><span class="dot dot-total"></span> ML Flagged: <strong>${summary.total_flagged_ml}</strong></div>
+        <div class="summary-pill fade-in fade-in-delay-1"><span class="dot" style="background:var(--accent-violet)"></span> ISINs Matched: <strong>${summary.isins_matched_events}</strong></div>
+        <div class="summary-pill fade-in fade-in-delay-2"><span class="dot" style="background:var(--accent-cyan)"></span> Articles Analysed: <strong>${summary.pre_event_articles_analysed}</strong></div>
+        <div class="summary-pill fade-in fade-in-delay-3"><span class="dot dot-flagged"></span> Kept After Sentiment: <strong>${summary.trades_kept_after_sentiment}</strong></div>
+        <div class="summary-pill fade-in fade-in-delay-4"><span class="dot" style="background:var(--accent-emerald)"></span> Removed: <strong>${summary.trades_removed_by_sentiment}</strong></div>
+    `;
+
+    // Metric cards
+    if (metrics && Object.keys(metrics).length > 0) {
+        const sMetrics = [
+            { key: 'accuracy',  label: 'Accuracy',  accent: 'indigo',  fmt: pct },
+            { key: 'precision', label: 'Precision', accent: 'violet',  fmt: pct },
+            { key: 'recall',    label: 'Recall',    accent: 'cyan',    fmt: pct },
+            { key: 'f1',        label: 'F1 Score',  accent: 'emerald', fmt: pct },
+        ];
+        if (metrics.roc_auc !== undefined) {
+            sMetrics.push({ key: 'roc_auc', label: 'ROC-AUC', accent: 'blue', fmt: pct });
+        }
+        $('sentiment-metrics-grid').innerHTML = sMetrics.map((m, i) => `
+            <div class="metric-card accent-${m.accent} fade-in fade-in-delay-${i % 4 + 1}">
+                <div class="label">${m.label}</div>
+                <div class="value">${m.fmt(metrics[m.key])}</div>
+                <div class="sub">Sentiment-Refined (on flagged subset)</div>
+            </div>
+        `).join('');
+
+        // Confusion matrix
+        $('sentiment-confusion-matrix').innerHTML = `
+            <div class="cm-label"></div>
+            <div class="cm-label">Pred 0</div>
+            <div class="cm-label">Pred 1</div>
+            <div class="cm-label" style="writing-mode:vertical-rl; transform:rotate(180deg);">Actual 0</div>
+            <div class="cm-cell cm-tn"><span class="cell-label">TN</span>${(metrics.tn || 0).toLocaleString()}</div>
+            <div class="cm-cell cm-fp"><span class="cell-label">FP</span>${(metrics.fp || 0).toLocaleString()}</div>
+            <div class="cm-label" style="writing-mode:vertical-rl; transform:rotate(180deg);">Actual 1</div>
+            <div class="cm-cell cm-fn"><span class="cell-label">FN</span>${(metrics.fn || 0).toLocaleString()}</div>
+            <div class="cm-cell cm-tp"><span class="cell-label">TP</span>${(metrics.tp || 0).toLocaleString()}</div>
+        `;
+    } else {
+        $('sentiment-metrics-grid').innerHTML = '<p style="color:var(--text-muted);">No ground truth metrics available for this run.</p>';
+        $('sentiment-confusion-matrix').innerHTML = '';
+    }
+
+    // ISIN sentiment table
+    if (isin_sentiments.length > 0) {
+        let html = '<table class="data-table"><thead><tr>';
+        html += '<th>ISIN</th><th>Event Type</th><th>Articles</th><th>Sentiment</th><th>Avg Score</th><th>Pos</th><th>Neg</th><th>Neu</th>';
+        html += '</tr></thead><tbody>';
+        isin_sentiments.slice(0, 100).forEach(r => {
+            html += `<tr>
+                <td style="font-family:'JetBrains Mono',monospace; font-size:0.76rem;">${r.isin}</td>
+                <td>${r.dominant_event_type || '—'}</td>
+                <td>${r.n_articles}</td>
+                <td><span class="badge badge-${r.dominant_sentiment}">${r.dominant_sentiment}</span></td>
+                <td>${(r.avg_sentiment || 0).toFixed(3)}</td>
+                <td style="color:var(--accent-emerald)">${r.pos_count}</td>
+                <td style="color:var(--accent-rose)">${r.neg_count}</td>
+                <td style="color:var(--text-muted)">${r.neu_count}</td>
+            </tr>`;
+        });
+        html += '</tbody></table>';
+        $('isin-sentiment-container').innerHTML = html;
+    }
+
+    // Refined trades table
+    $('sentiment-flagged-label').textContent = `${summary.trades_kept_after_sentiment} trades remain flagged after sentiment refinement (${summary.trades_removed_by_sentiment} removed)`;
+    renderTradesTable('sentiment-table-container', refined_trades, [
+        'trade_id', 'trader_id', 'isin', 'trade_type', 'prob_insider',
+        'top_reasons', 'dominant_sentiment', 'avg_sentiment', 'alignment', 'sentiment_adj_prob',
+        'sentiment_flag', 'is_insider'
+    ]);
+}
+
+
+// ═══════════ Helpers ═══════════
+
+function pct(v) {
+    if (v == null) return '—';
+    return (v * 100).toFixed(1) + '%';
+}
+
+function renderTradesTable(containerId, rows, columns) {
+    if (!rows || rows.length === 0) {
+        $(containerId).innerHTML = '<p style="padding:20px; color:var(--text-muted);">No data to display.</p>';
+        return;
+    }
+
+    const colLabels = {
+        trade_id: 'Trade ID', trader_id: 'Trader ID', isin: 'ISIN', trade_type: 'Type',
+        quantity: 'Qty', risk_score: 'Risk Score', risk_level: 'Risk', prob_insider: 'P(Insider)',
+        top_reasons: 'Flag Reasons (Explanation)', dominant_sentiment: 'Sentiment', avg_sentiment: 'Avg Sent.',
+        alignment: 'Alignment', sentiment_adj_prob: 'Adj. Prob', sentiment_flag: 'Sent. Flag',
+        is_insider: 'Label', n_articles: 'Articles', dominant_event_type: 'Event Type'
+    };
+
+    let html = '<table class="data-table"><thead><tr>';
+    columns.forEach(c => { html += `<th>${colLabels[c] || c}</th>`; });
+    html += '</tr></thead><tbody>';
+
+    rows.slice(0, 200).forEach(row => {
+        html += '<tr>';
+        columns.forEach(c => {
+            let val = row[c];
+            // Formatting
+            if (c === 'risk_level') {
+                const cls = (val || '').toLowerCase();
+                val = `<span class="badge badge-${cls}">${val || '—'}</span>`;
+            } else if (c === 'dominant_sentiment') {
+                const cls = (val || '').toLowerCase();
+                val = `<span class="badge badge-${cls}">${val || '—'}</span>`;
+            } else if (c === 'sentiment_flag' || c === 'is_insider') {
+                val = val === 1 ? '<span style="color:var(--accent-rose); font-weight:600;">1</span>' :
+                      val === 0 ? '<span style="color:var(--accent-emerald);">0</span>' : '—';
+            } else if (typeof val === 'number' && !Number.isInteger(val)) {
+                val = val.toFixed(4);
+            } else if (c === 'top_reasons') {
+                val = `<span style="font-size:0.75rem; color:var(--accent-cyan);">${val || '—'}</span>`;
+            } else if (c === 'isin' || c === 'trade_id' || c === 'trader_id') {
+                val = `<span style="font-family:'JetBrains Mono',monospace; font-size:0.76rem;">${val || '—'}</span>`;
+            } else if (val == null) {
+                val = '—';
+            }
+            html += `<td>${val}</td>`;
+        });
+        html += '</tr>';
+    });
+
+    html += '</tbody></table>';
+    if (rows.length > 200) {
+        html += `<p style="padding:12px; text-align:center; color:var(--text-muted); font-size:0.78rem;">Showing 200 of ${rows.length} rows</p>`;
+    }
+    $(containerId).innerHTML = html;
+}
+
+
+// ═══════════ Regulatory Explainability & PDF Export Logic ═══════════
+
+async function loadExplainabilitySection() {
+    overlay.classList.remove('hidden');
+    progressText.textContent = 'Loading Explainability Data…';
+    progressSub.textContent = 'Filtering truly insider trades flagged by sentiment analysis';
+
+    try {
+        const res = await fetch('/api/explainability/trades');
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        
+        overlay.classList.add('hidden');
+        renderExplainabilitySection(data.trades);
+        $('explainability-section').classList.remove('hidden');
+        $('explainability-section').scrollIntoView({ behavior: 'smooth' });
+    } catch (e) {
+        overlay.classList.add('hidden');
+        alert('Failed to load explainability data: ' + e.message);
+    }
+}
+
+function renderExplainabilitySection(trades) {
+    $('explainability-summary-row').innerHTML = `
+        <div class="summary-pill">
+            <span class="lbl">Truly Insider &amp; Sentiment Flagged:</span>
+            <span class="val" style="color:var(--accent-rose); font-weight:700;">${trades.length} Trades</span>
+        </div>
+        <div class="summary-pill">
+            <span class="lbl">Filter Criteria:</span>
+            <span class="val" style="color:var(--accent-cyan); font-size:0.82rem;">is_insider = 1 &amp; sentiment_flag = 1</span>
+        </div>
+        <div class="summary-pill">
+            <span class="lbl">Regulatory Standard:</span>
+            <span class="val" style="color:var(--accent-indigo); font-size:0.82rem;">SEBI (PIT) Regulations 2015</span>
+        </div>
+    `;
+
+    $('explainability-count-label').textContent = `${trades.length} confirmed insider trades available for regulatory reasoning and PDF export. Click on any row or button below to inspect details.`;
+
+    if (!trades || trades.length === 0) {
+        $('explainability-table-container').innerHTML = '<p style="padding:20px; color:var(--text-muted);">No truly insider trades flagged by sentiment analysis found.</p>';
+        return;
+    }
+
+    let html = '<table class="data-table"><thead><tr>';
+    html += '<th>Trade ID</th><th>Trader ID</th><th>ISIN</th><th>Type</th><th>P(Insider)</th><th>Adj. Prob</th><th>Sentiment</th><th>Label</th><th>Action</th>';
+    html += '</tr></thead><tbody>';
+
+    trades.forEach(r => {
+        html += `<tr style="cursor:pointer;" onclick="openTradeExplainability('${r.trade_id}')">
+            <td style="font-family:'JetBrains Mono',monospace; font-size:0.76rem; font-weight:600; color:var(--accent-cyan);">${r.trade_id}</td>
+            <td style="font-family:'JetBrains Mono',monospace; font-size:0.76rem;">${r.trader_id}</td>
+            <td style="font-family:'JetBrains Mono',monospace; font-size:0.76rem;">${r.isin}</td>
+            <td><span class="badge badge-medium">${r.trade_type || 'BUY'}</span></td>
+            <td>${(r.prob_insider || 0).toFixed(4)}</td>
+            <td style="font-weight:700; color:var(--accent-rose);">${(r.sentiment_adj_prob || r.prob_insider || 0).toFixed(4)}</td>
+            <td><span class="badge badge-${(r.dominant_sentiment || 'neutral').toLowerCase()}">${r.dominant_sentiment || 'neutral'}</span></td>
+            <td><span style="color:var(--accent-rose); font-weight:700;">1 (Insider)</span></td>
+            <td>
+                <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openTradeExplainability('${r.trade_id}')">
+                    ⚖️ Explainability
+                </button>
+            </td>
+        </tr>`;
+    });
+
+    html += '</tbody></table>';
+    $('explainability-table-container').innerHTML = html;
+}
+
+async function openTradeExplainability(tradeId) {
+    currentExplainTradeId = tradeId;
+    overlay.classList.remove('hidden');
+    progressText.textContent = 'Generating SEBI Regulatory Reasoning…';
+    progressSub.textContent = `Analyzing trade ${tradeId}`;
+
+    try {
+        const res = await fetch(`/api/explainability/trade/${tradeId}`);
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        overlay.classList.add('hidden');
+
+        const trade = data.trade;
+        const violations = data.violations;
+
+        $('modal-trade-title').textContent = `Regulatory Audit — Trade ID: ${trade.trade_id}`;
+        $('modal-trade-subtitle').textContent = `SEBI (Prohibition of Insider Trading) Regulations, 2015 Compliance Breakdown`;
+
+        const rawProb = trade.prob_insider != null ? (trade.prob_insider * 100).toFixed(2) + '%' : '—';
+        const adjProb = trade.sentiment_adj_prob != null ? (trade.sentiment_adj_prob * 100).toFixed(2) + '%' : '—';
+        const totalVal = trade.total_value != null ? 'Rs. ' + Number(trade.total_value).toLocaleString('en-IN', {maximumFractionDigits:2}) : '—';
+        const priceFmt = trade.price != null ? 'Rs. ' + Number(trade.price).toFixed(2) : '—';
+        const timeEvtFmt = trade.time_to_next_event != null ? Number(trade.time_to_next_event).toFixed(1) + ' hrs' : '—';
+        const volZFmt = trade.volume_zscore != null ? '+' + Number(trade.volume_zscore).toFixed(2) : '—';
+
+        let bodyHtml = `
+            <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:18px; margin-bottom:16px; box-shadow:var(--shadow-sm);">
+                <h4 style="font-size:0.85rem; font-weight:700; color:var(--accent-indigo); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; display:flex; align-items:center; gap:6px;">
+                    👤 Trader Company Profile &amp; Pre-Clearance Status
+                </h4>
+                <div class="detail-grid" style="grid-template-columns: repeat(4, 1fr);">
+                    <div class="detail-item"><span class="lbl">Trader ID</span><span class="val">${trade.trader_id || '—'}</span></div>
+                    <div class="detail-item"><span class="lbl">Role Class</span><span class="val" style="color:var(--accent-indigo); font-weight:700;">${trade.role_class || '—'}</span></div>
+                    <div class="detail-item"><span class="lbl">Department</span><span class="val">${trade.department || '—'}</span></div>
+                    <div class="detail-item"><span class="lbl">Pre-Clearance</span><span class="val" style="color:${trade.preclear_status === 'Required' ? 'var(--accent-rose)' : 'var(--text-secondary)'}; font-weight:600;">${trade.preclear_status || '—'}</span></div>
+                    <div class="detail-item"><span class="lbl">Associated PAN</span><span class="val" style="font-family:'JetBrains Mono',monospace;">${trade.associated_pan || '—'}</span></div>
+                </div>
+            </div>
+
+            <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:18px; margin-bottom:16px; box-shadow:var(--shadow-sm);">
+                <h4 style="font-size:0.85rem; font-weight:700; color:var(--accent-emerald); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; display:flex; align-items:center; gap:6px;">
+                    📊 Trade Execution &amp; Financial Anomaly Factors
+                </h4>
+                <div class="detail-grid" style="grid-template-columns: repeat(4, 1fr);">
+                    <div class="detail-item"><span class="lbl">Execution Timestamp</span><span class="val" style="font-family:'JetBrains Mono',monospace;">${trade.timestamp || '—'}</span></div>
+                    <div class="detail-item"><span class="lbl">Trade Type / Qty</span><span class="val"><span class="badge badge-medium">${trade.trade_type || 'BUY'}</span> ${(trade.quantity || 0).toLocaleString()}</span></div>
+                    <div class="detail-item"><span class="lbl">Execution Price</span><span class="val">${priceFmt}</span></div>
+                    <div class="detail-item"><span class="lbl">Total Trade Value</span><span class="val" style="font-weight:700; color:var(--accent-amber);">${totalVal}</span></div>
+                    <div class="detail-item"><span class="lbl">Exact ML Prob (Raw)</span><span class="val" style="color:var(--accent-cyan); font-weight:700;">${rawProb}</span></div>
+                    <div class="detail-item"><span class="lbl">Sentiment Adj. Prob</span><span class="val" style="color:var(--accent-rose); font-weight:700;">${adjProb}</span></div>
+                    <div class="detail-item"><span class="lbl">Volume Z-Score</span><span class="val">${volZFmt}</span></div>
+                    <div class="detail-item"><span class="lbl">Order Percentile</span><span class="val">${trade.order_size_percentile != null ? trade.order_size_percentile.toFixed(1) + '%' : '—'}</span></div>
+                </div>
+            </div>
+
+            <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:12px; padding:18px; margin-bottom:20px; box-shadow:var(--shadow-sm);">
+                <h4 style="font-size:0.85rem; font-weight:700; color:var(--accent-amber); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px; display:flex; align-items:center; gap:6px;">
+                    📰 Matched Price-Sensitive News &amp; Lead-Lag Surveillance
+                </h4>
+                <div class="detail-grid" style="grid-template-columns: repeat(2, 1fr);">
+                    <div class="detail-item" style="grid-column: span 2;">
+                        <span class="lbl">Article Headline</span>
+                        <span class="val" style="font-style:italic; color:var(--text-primary); font-size:0.86rem;">"${trade.news_headline || 'Corporate Financial Announcement'}"</span>
+                    </div>
+                    <div class="detail-item"><span class="lbl">News Publication Date</span><span class="val">${trade.news_pub_date || '—'}</span></div>
+                    <div class="detail-item"><span class="lbl">Time to News Event</span><span class="val" style="color:var(--accent-cyan); font-weight:600;">${timeEvtFmt}</span></div>
+                    <div class="detail-item"><span class="lbl">Lead-Lag Pattern</span><span class="val">${(trade.lead_lag_category || '—').replace(/_/g, ' ')}</span></div>
+                    <div class="detail-item"><span class="lbl">FinBERT Sentiment</span><span class="val">${trade.avg_sentiment != null ? trade.avg_sentiment.toFixed(3) : '—'} (${trade.dominant_sentiment || 'neutral'})</span></div>
+                </div>
+            </div>
+
+            <h3 style="font-size:0.95rem; font-weight:700; margin-bottom:14px; color:var(--text-primary);">
+                Violated SEBI PIT Regulatory Sections (${violations.length})
+            </h3>
+        `;
+
+        violations.forEach((v, idx) => {
+            bodyHtml += `
+                <div class="violation-card severity-${v.severity}">
+                    <div class="violation-header">
+                        <div class="violation-section">${idx + 1}. ${v.section} — ${v.title}</div>
+                        <span class="badge-sev ${v.severity}">${v.severity}</span>
+                    </div>
+                    <div class="violation-desc"><b>Regulatory Regulation:</b> ${v.description}</div>
+                    <ul class="evidence-list">
+                        ${v.evidence.map(ev => `<li>${ev}</li>`).join('')}
+                    </ul>
+                    <div class="legal-citation"><b>Statutory Citation:</b> ${v.legal_ref}</div>
+                </div>
+            `;
+        });
+
+        $('modal-body').innerHTML = bodyHtml;
+
+        // Attach PDF trigger
+        $('modal-pdf-btn').onclick = () => {
+            window.open(`/api/explainability/pdf/${trade.trade_id}`, '_blank');
+        };
+
+        $('explain-modal').classList.remove('hidden');
+    } catch (e) {
+        overlay.classList.add('hidden');
+        alert('Failed to load trade explainability: ' + e.message);
+    }
+}
+
+function closeModal() {
+    $('explain-modal').classList.add('hidden');
+}
+
+</script>
+</body>
+</html>
+
