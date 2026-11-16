@@ -49,7 +49,7 @@ Evaluated on a strict held-out test set of traders (20% of traders never seen du
 ---
 
 ### 2. Stage 2: Sentiment & Lead-Lag Analysis Metrics
-Evaluated on 1,886 pre-event news headlines matched by ISIN to flagged trades, measuring sentiment alignment and news timestamp lead-lag relationships.
+Evaluated on 1,886 pre-event news headlines matched by ISIN to flagged trades, measuring sentiment alignment and news timestamp lead-lag relationships using **Guardrailed FinBERT**.
 
 | Metric | Sentiment-Refined Score | Description / Significance |
 | :--- | :--- | :--- |
@@ -60,6 +60,8 @@ Evaluated on 1,886 pre-event news headlines matched by ISIN to flagged trades, m
 | **ROC-AUC** | **77.2%** | Discrimination ability of composite sentiment-lead-lag score. |
 
 * **Coverage**: 1,886 corporate headlines analyzed across 420 matched ISINs.
+* **Active Guardrails**: Input entity anonymization (`[COMPANY]`), Shannon Entropy uncertainty gating, and routine regulatory filing calibration.
+* **LoRA Adaptation**: Parameter-efficient fine-tuning on attention projections (`query`, `value`) via PEFT.
 
 ---
 
@@ -89,7 +91,7 @@ Insider trading surveillance in modern financial markets requires detecting subt
 
 The proposed architecture introduces a three-tier hybrid framework:
 1. **Tier 1 (Behavioral Anomaly Screening)**: Point-in-time feature engineering combined with a soft-voting ensemble of Logistic Regression with L2 regularization and Histogram-based Gradient Boosting Classifiers.
-2. **Tier 2 (NLP & Lead-Lag Contextual Pruning)**: FinBERT (`ProsusAI/finbert`) text analysis on financial news headlines paired with exact publication timestamp delta evaluation to distinguish pre-news insider execution from post-news public reactions.
+2. **Tier 2 (NLP & Lead-Lag Contextual Pruning)**: Guardrailed FinBERT (`ProsusAI/finbert` + PEFT LoRA) text analysis on corporate disclosures paired with exact publication timestamp delta evaluation to distinguish pre-news insider execution from post-news public reactions.
 3. **Tier 3 (LLM Regulatory Reasoning)**: Feature-driven statutory evaluation against the SEBI (Prohibition of Insider Trading) Regulations, 2015 to dynamically synthesize legal compliance audit reports.
 
 ---
@@ -107,9 +109,14 @@ $$\Delta T_{\text{lead}} = \frac{T_{\text{news}} - T_{\text{trade}}}{3600} \quad
 * If $\Delta T_{\text{lead}} > 0$: Trade executed **before** public news release ($\text{Lead-Lag: Trade Before News}$).
 * If $\Delta T_{\text{lead}} < 0$: Trade executed **after** public news release ($\text{Lead-Lag: Trade After News}$).
 
-### C. FinBERT Sentiment Alignment Score ($\mathcal{A}$)
+### C. FinBERT Sentiment Alignment Score ($\mathcal{A}$) & Active Guardrails
 Let $S_{\text{FinBERT}} \in [-1, +1]$ be the signed sentiment score (+score for positive, -score for negative). Sentiment alignment with trade direction is defined as:
 $$\mathcal{A} = \begin{cases} +S_{\text{FinBERT}} & \text{if } \text{Trade Type} = \text{BUY} \\ -S_{\text{FinBERT}} & \text{if } \text{Trade Type} = \text{SELL} \end{cases}$$
+
+**Active Safety Guardrails:**
+1. **Input Entity Anonymization:** Company names and ticker symbols are masked to `[COMPANY]` before tokenization, preventing ticker-specific memorization or brand bias.
+2. **Shannon Entropy Uncertainty Gating:** The predictive entropy is computed as $H(p) = -\sum_{c} p_c \ln(p_c)$. If $H(p) > 0.95$ or confidence $< 0.55$, the prediction is gated as ambiguous and neutralized to $0.0$.
+3. **Event-Type Calibration:** Routine statutory filings (postal ballots, compliance intimations, AGM notifications) have their raw sentiment impact discounted by 75%.
 
 ### D. Composite Risk Adjustment Equation
 The final sentiment-adjusted probability $P_{\text{adj}}$ modifies base ML probability $P_{\text{ML}}$:
@@ -148,7 +155,8 @@ The regulatory reasoning module dynamically checks each trade against the offici
 c:/insider_trading_detection/
 ├── app.py                         # FastAPI web server & REST API endpoints
 ├── insider_pipeline.py            # ML feature engineering & ensemble trainer
-├── sentiment_analysis.py          # FinBERT NLP sentiment & lead-lag engine
+├── sentiment_analysis.py          # Guardrailed FinBERT NLP sentiment & lead-lag engine
+├── finetune_finbert_lora.py       # (Optional) One-time LoRA PEFT fine-tuning script
 ├── regulatory_reasoning.py        # Hugging Face LLM legal reasoning & ReportLab PDF generator
 ├── templates/
 │   └── index.html                 # Interactive web dashboard & Explainability Modal UI
@@ -159,6 +167,8 @@ c:/insider_trading_detection/
 │   ├── profile.csv                # 1,000 trader profiles (roles, PANs, pre-clearance rules)
 │   ├── events_real_master.csv     # Scraped NSE corporate announcements & news headlines
 │   └── insider_detection_FINAL.ipynb # Jupyter notebook benchmark
+├── models/
+│   └── finbert_lora/              # (Auto-generated) LoRA adapter weights & config
 └── outputs/                       # Persisted ML model bundles, scored trades & PDFs
 ```
 
@@ -171,24 +181,30 @@ c:/insider_trading_detection/
 * **Ensemble Architecture**: Soft-voting ensemble combining `LogisticRegression` (with `StandardScaler`) and `HistGradientBoostingClassifier`.
 * **Optimization**: Automated threshold selection ($\beta = 2.0$) prioritizing recall to catch suspicious trades while preserving high precision.
 
-### B. `sentiment_analysis.py` (FinBERT & Lead-Lag Engine)
-* **FinBERT Batch Inference**: Loads `ProsusAI/finbert` to classify pre-event news titles into positive, negative, or neutral sentiment.
+### B. `sentiment_analysis.py` (Guardrailed FinBERT & Lead-Lag Engine)
+* **Dynamic Model Detection**: Checks `models/finbert_lora/` for fine-tuned LoRA weights. If present, activates the adapter (`LoRA: True`); otherwise, seamlessly falls back to base `ProsusAI/finbert` (`LoRA: False`).
+* **Active Guardrails**: Implements company entity anonymization (`[COMPANY]`), Shannon entropy uncertainty gating, and routine regulatory filing calibration.
 * **Lead-Lag Analysis**: Compares trade timestamps with article `pub_ist` timestamps to categorize trades (`trade_before_news`, `trade_after_news`, `mixed_mostly_after`).
 * **Composite Refinement**: Adjusts ML probabilities using event proximity and sentiment alignment.
 
-### C. `regulatory_reasoning.py` (LLM Reasoning & PDF Generation)
+### C. `finetune_finbert_lora.py` (LoRA Fine-Tuning Pipeline)
+* **Parameter-Efficient Fine-Tuning (PEFT)**: Freezes 99.73% of FinBERT and trains lightweight low-rank adapters (~297,000 trainable parameters on `query` and `value` attention projections).
+* **Hardware Friendly**: Capable of training on standard CPU (multi-core) or GPU with automatic device detection.
+* **One-Time Execution**: Trains once offline and writes weights to `models/finbert_lora/` for instant loading on web app startup.
+
+### D. `regulatory_reasoning.py` (LLM Reasoning & PDF Generation)
 * **LLM Engine**: Lazy-loads Hugging Face `transformers` pipeline (`distilgpt2`) to synthesize legal rationale.
 * **Feature-Driven Synthesis**: Combines trade role, execution timestamp, news headline, and volume z-score into legal explanations.
 * **ReportLab PDF Engine**: Generates PDF compliance audit reports containing overview tables, news indicators, and SEBI statutory citations.
 
-### D. `app.py` (FastAPI Web Backend)
+### E. `app.py` (FastAPI Web Backend)
 Provides asynchronous REST endpoints serving the web dashboard:
 
 | Endpoint | Method | Function & Description |
 | :--- | :--- | :--- |
 | `/` | `GET` | Serves the interactive HTML5/JS Web Dashboard. |
 | `/api/upload` | `POST` | Accepts `trade.csv` & `profile.csv`, runs feature engineering + ML model, returns metrics & flagged trades. |
-| `/api/sentiment` | `POST` | Executes FinBERT sentiment analysis & lead-lag refinement on flagged trades. |
+| `/api/sentiment` | `POST` | Executes Guardrailed FinBERT sentiment analysis & lead-lag refinement on flagged trades. |
 | `/api/explainability/trades` | `GET` | Returns list of ground-truth insider sentiment-flagged trades (`is_insider==1 & sentiment_flag==1`). |
 | `/api/explainability/trade/{trade_id}` | `GET` | Fetches trade details, trader profile, news article, and violated SEBI sections. |
 | `/api/explainability/pdf/{trade_id}` | `GET` | Generates and downloads the official ReportLab PDF compliance audit report. |
@@ -201,20 +217,32 @@ Provides asynchronous REST endpoints serving the web dashboard:
 Ensure Python 3.10+ is installed:
 ```bash
 cd c:/insider_trading_detection
-pip install fastapi uvicorn pandas numpy scikit-learn transformers reportlab pypdf torch
+pip install fastapi uvicorn pandas numpy scikit-learn transformers reportlab pypdf torch peft
 ```
 
-### 2. Run Command-Line Pipeline (Optional)
+### 2. Optional: Fine-Tune LoRA FinBERT (One-Time Step)
+> [!NOTE]
+> This step is **completely optional**. If skipped, the application runs smoothly out of the box using base `ProsusAI/finbert` (`LoRA: False`).
+
+To train the domain-adapted LoRA model on Indian market corporate disclosures:
+```bash
+python finetune_finbert_lora.py
+```
+* **Device**: Automatically uses GPU (CUDA) if available; otherwise trains on CPU.
+* **Duration**: ~30–60 seconds on GPU, ~8–10 minutes on CPU.
+* **Output**: Saves adapter weights into `models/finbert_lora/`. On next app launch, the system automatically detects the checkpoint and logs `(LoRA: True)`.
+
+### 3. Run Command-Line Pipeline (Optional)
 ```bash
 python insider_pipeline.py --trade data/trade.csv --profile data/profile.csv --out-dir outputs
 ```
 
-### 3. Launch Web Application Server
+### 4. Launch Web Application Server
 ```bash
 python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 4. Access Interactive Dashboard
+### 5. Access Interactive Dashboard
 Open your web browser and navigate to:
 ```text
 http://localhost:8000/

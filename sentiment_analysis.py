@@ -18,7 +18,7 @@ rises by whatever the data can support.
 Honest expectation: with recall pinned at 99.9% the gain is modest (about +1 to +2 points of
 precision on my reproduction). Raising precision much further needs new information, not new rules.
 """
-import os, warnings, numpy as np, pandas as pd
+import os, re, warnings, numpy as np, pandas as pd
 from sklearn.model_selection import GroupKFold
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import (accuracy_score, precision_score, recall_score,
@@ -29,25 +29,127 @@ EVENTS_PATH = os.path.join(os.path.dirname(__file__), "data", "events_real_maste
 RECALL_FLOOR = 0.999      # minimum recall (on ML-flagged true insiders) the refinement must keep
 SEED, N_FOLDS = 42, 5
 
-# ---------------------------------------------------------------- FinBERT
-_finbert_pipeline = None
-def _get_finbert():
-    global _finbert_pipeline
-    if _finbert_pipeline is None:
-        from transformers import pipeline as hf_pipeline
-        _finbert_pipeline = hf_pipeline("sentiment-analysis", model="ProsusAI/finbert",
-                                        tokenizer="ProsusAI/finbert", device=-1,
-                                        truncation=True, max_length=512)
-    return _finbert_pipeline
+# ---------------------------------------------------------------- FinBERT (Base / LoRA Fine-Tuned) + Guardrails
+_model_instance = None
+_tokenizer_instance = None
+_is_lora_loaded = False
+LORA_MODEL_DIR = os.path.join(os.path.dirname(__file__), "models", "finbert_lora")
 
-def _run_finbert_batch(titles, batch_size=32):
-    pipe, out = _get_finbert(), []
-    n_b = (len(titles) + batch_size - 1) // batch_size
-    for k, i in enumerate(range(0, len(titles), batch_size), 1):
-        b = [t if isinstance(t, str) and t.strip() else "no headline" for t in titles[i:i + batch_size]]
-        out.extend(pipe(b))
-        print(f"--> FinBERT batch {k}/{n_b}", flush=True)
-    return out
+def anonymize_text(text: str, company_name: str = None, symbol: str = None) -> str:
+    """Input Guardrail: Strips company names & symbols to prevent brand-prior bias."""
+    if not isinstance(text, str) or not text.strip():
+        return "corporate disclosure"
+    cleaned = text
+    if company_name and isinstance(company_name, str) and len(company_name.strip()) > 2:
+        c_clean = company_name.strip()
+        base_name = re.sub(r"\b(ltd|limited|corp|corporation|inc|industries)\b", "", c_clean, flags=re.IGNORECASE).strip()
+        if len(base_name) > 2:
+            cleaned = re.sub(re.escape(base_name), "[COMPANY]", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(re.escape(c_clean), "[COMPANY]", cleaned, flags=re.IGNORECASE)
+    if symbol and isinstance(symbol, str) and len(symbol.strip()) > 1:
+        cleaned = re.sub(r"\b" + re.escape(symbol.strip()) + r"\b", "[COMPANY]", cleaned, flags=re.IGNORECASE)
+    # Clean common corporate suffixes (Industries, Bank, Motors, etc.)
+    cleaned = re.sub(r"\[COMPANY\]\s+(Industries|Enterprises|Holdings|Motors|Steel|Power|Bank|Services|Finance|Tech|Technologies)\b", "[COMPANY]", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(\[COMPANY\]\s*)+", "[COMPANY] ", cleaned)
+    return cleaned.strip()
+
+def _load_finbert():
+    """Loads fine-tuned LoRA FinBERT if available, else standard ProsusAI/finbert."""
+    global _model_instance, _tokenizer_instance, _is_lora_loaded
+    if _model_instance is not None:
+        return _model_instance, _tokenizer_instance, _is_lora_loaded
+
+    import torch
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+    base_name = "ProsusAI/finbert"
+    if os.path.exists(os.path.join(LORA_MODEL_DIR, "adapter_model.safetensors")) or \
+       os.path.exists(os.path.join(LORA_MODEL_DIR, "adapter_model.bin")):
+        try:
+            from peft import PeftModel
+            _tokenizer_instance = AutoTokenizer.from_pretrained(LORA_MODEL_DIR)
+            base = AutoModelForSequenceClassification.from_pretrained(base_name, num_labels=3)
+            _model_instance = PeftModel.from_pretrained(base, LORA_MODEL_DIR)
+            _model_instance.eval()
+            _is_lora_loaded = True
+            print(f"--> [FinBERT] Loaded FINE-TUNED LoRA model from {LORA_MODEL_DIR}")
+            return _model_instance, _tokenizer_instance, _is_lora_loaded
+        except Exception as e:
+            print(f"--> [FinBERT] Warning: Failed loading LoRA weights ({e}), falling back to base.")
+
+    _tokenizer_instance = AutoTokenizer.from_pretrained(base_name)
+    _model_instance = AutoModelForSequenceClassification.from_pretrained(base_name)
+    _model_instance.eval()
+    _is_lora_loaded = False
+    print("--> [FinBERT] Loaded BASE ProsusAI/finbert model.")
+    return _model_instance, _tokenizer_instance, _is_lora_loaded
+
+def _run_finbert_guardrailed_batch(items, batch_size=32):
+    """
+    Runs batch inference with 3 Guardrail stages:
+      1. Input Guardrail: Entity anonymization (replaces company/symbol with [COMPANY]).
+      2. Uncertainty Guardrail: Shannon entropy check (dampens ambiguous predictions).
+      3. Calibration Guardrail: Discounts routine filings.
+    """
+    import torch
+    model, tokenizer, is_lora = _load_finbert()
+    results = []
+    n_b = (len(items) + batch_size - 1) // batch_size
+
+    # id2label mapping for ProsusAI/finbert: {0: 'positive', 1: 'negative', 2: 'neutral'}
+    id2label = getattr(model.config, "id2label", {0: "positive", 1: "negative", 2: "neutral"})
+
+    for k in range(0, len(items), batch_size):
+        chunk = items[k:k + batch_size]
+        cleaned_texts = []
+        for it in chunk:
+            c_text = anonymize_text(it.get("title", ""), it.get("company_name"), it.get("symbol"))
+            cleaned_texts.append(c_text)
+
+        enc = tokenizer(cleaned_texts, padding=True, truncation=True, max_length=128, return_tensors="pt")
+        with torch.no_grad():
+            logits = model(**enc).logits
+            probs = torch.softmax(logits, dim=-1).cpu().numpy()
+
+        for i, it in enumerate(chunk):
+            p = probs[i]
+            # Probabilities
+            p_pos = float(p[0]) if id2label[0] == "positive" else float(p[2])
+            p_neg = float(p[1]) if id2label[1] == "negative" else float(p[0])
+            p_neu = float(p[2]) if id2label[2] == "neutral" else float(p[1])
+
+            best_idx = int(np.argmax(p))
+            label = id2label[best_idx].lower()
+            conf = float(np.max(p))
+
+            # Guardrail 2: Shannon Entropy
+            entropy = -float(np.sum(p * np.log(p + 1e-9)))
+            # If entropy is high (> 0.95) or confidence < 0.55, neutralize
+            if entropy > 0.95 or conf < 0.55:
+                raw_val = 0.0
+                gated = True
+            else:
+                raw_val = p_pos - p_neg
+                gated = False
+
+            # Guardrail 3: Event-type calibration
+            ev_type = str(it.get("primary_event_type", "")).lower()
+            routine_keywords = ["general meeting", "postal ballot", "change in address", "compliance", "intimation"]
+            calibrated_val = raw_val
+            if any(r in ev_type for r in routine_keywords):
+                calibrated_val *= 0.25
+
+            results.append({
+                "label": label,
+                "score": conf,
+                "sentiment_value": calibrated_val,
+                "entropy": entropy,
+                "guardrail_gated": gated,
+                "anonymized_title": cleaned_texts[i]
+            })
+        print(f"--> Guardrailed FinBERT batch {k // batch_size + 1}/{n_b} (LoRA: {is_lora})", flush=True)
+
+    return results, is_lora
 
 def _sent_val(label, score):
     return score if label == "positive" else (-score if label == "negative" else 0.0)
@@ -149,11 +251,14 @@ def run_sentiment_analysis(flagged_trades, all_scored_trades, trade_data=None,
     if len(pre_events) == 0:
         return _empty_results(flagged_trades, "No pre-event articles found for flagged ISINs")
 
-    cb(f"Running FinBERT on {len(pre_events)} articles", 0.15)
-    sents = _run_finbert_batch(pre_events["title"].tolist())
+    cb(f"Running Guardrailed FinBERT on {len(pre_events)} articles", 0.15)
+    records_in = pre_events.to_dict("records")
+    sents, is_lora = _run_finbert_guardrailed_batch(records_in)
     pre_events["sentiment_label"] = [s["label"] for s in sents]
     pre_events["sentiment_score"] = [s["score"] for s in sents]
-    pre_events["sentiment_value"] = [_sent_val(s["label"], s["score"]) for s in sents]
+    pre_events["sentiment_value"] = [s["sentiment_value"] for s in sents]
+    pre_events["entropy"] = [s["entropy"] for s in sents]
+    pre_events["guardrail_gated"] = [s["guardrail_gated"] for s in sents]
 
     cb("Aggregating sentiment per ISIN", 0.55)
     isin_agg = pre_events.groupby("isin").agg(
@@ -232,7 +337,10 @@ def run_sentiment_analysis(flagged_trades, all_scored_trades, trade_data=None,
     refined = flagged[show].sort_values("sentiment_adj_prob", ascending=False)
     records = [{c: (None if pd.isna(v) else int(v) if isinstance(v, np.integer) else round(float(v), 4)
                     if isinstance(v, np.floating) else v) for c, v in r.items()} for r in refined.to_dict("records")]
-    summary = dict(total_flagged_ml=len(flagged_trades), isins_matched_events=len(flagged_isins & set(matched["isin"].unique())),
+    summary = dict(model_used="FinBERT (LoRA Fine-Tuned)" if is_lora else "FinBERT (Base ProsusAI + Guardrails)",
+                   guardrails_active=True,
+                   articles_gated_by_entropy=int(pre_events["guardrail_gated"].sum()) if "guardrail_gated" in pre_events else 0,
+                   total_flagged_ml=len(flagged_trades), isins_matched_events=len(flagged_isins & set(matched["isin"].unique())),
                    pre_event_articles_analysed=len(pre_events), trades_kept_after_sentiment=int(flagged.sentiment_flag.sum()),
                    trades_removed_by_sentiment=int((flagged.sentiment_flag == 0).sum()),
                    lead_lag_breakdown={str(k): int(v) for k, v in flagged["lead_lag_category"].value_counts().items()})

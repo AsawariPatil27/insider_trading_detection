@@ -28,3 +28,16 @@ Thumbs.db
 # IDE files
 .vscode/
 .idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Model Checkpoints & Adapters
+models/
+*.safetensors
+*.pt
+*.bin

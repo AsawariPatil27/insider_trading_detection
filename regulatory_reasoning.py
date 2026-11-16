@@ -45,7 +45,7 @@ def _get_gemini_client():
                 return _gemini_client
             print("--> Initializing Google Gemini AI client for regulatory reasoning...")
             _gemini_client = genai.Client(api_key=api_key)
-            print("--> Gemini AI client loaded successfully (model: gemini-3.5-flash-lite).")
+            print("--> Gemini AI client loaded successfully.")
         except Exception as e:
             print(f"--> Gemini AI client load note: {e}")
             _gemini_client = False
